@@ -1,15 +1,18 @@
-import 'package:camera/camera.dart';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart'; // Thư viện chọn ảnh chuẩn
+import 'package:gemini_chat_app/data/services/local_ai_service.dart';
 
-late final List<CameraDescription> _cameras;
-
-Future<void> main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Load Model 1 lần duy nhất
   try {
-    _cameras = await availableCameras();
-  } catch (_) {
-    _cameras = <CameraDescription>[];
+    final aiService = LocalAIService();
+    await aiService.loadModel();
+    print("✅ AI Service Ready!");
+  } catch (e) {
+    print("❌ AI Error: $e");
   }
 
   runApp(const MyApp());
@@ -22,107 +25,135 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: CameraPage(),
+      title: 'Gemini AI R&D',
+      home: AiTestScreen(),
     );
   }
 }
 
-class CameraPage extends StatefulWidget {
-  const CameraPage({super.key});
+class AiTestScreen extends StatefulWidget {
+  const AiTestScreen({super.key});
 
   @override
-  State<CameraPage> createState() => _CameraPageState();
+  State<AiTestScreen> createState() => _AiTestScreenState();
 }
 
-class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
-  CameraController? _controller;
-  Future<void>? _initFuture;
-  String? _error;
+class _AiTestScreenState extends State<AiTestScreen> {
+  File? _selectedImage;
+  String _result = "Chưa có kết quả";
+  bool _isLoading = false;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initCamera();
-  }
+  final ImagePicker _picker = ImagePicker();
 
-  Future<void> _initCamera() async {
-    if (_cameras.isEmpty) {
-      setState(
-        () => _error = "No camera found (emulator có thể không có camera).",
-      );
-      return;
-    }
-
-    // Nếu đã có controller thì không init lại
-    if (_controller != null) return;
-
+  // Hàm chọn ảnh và đoán
+  Future<void> _pickImage(ImageSource source) async {
     try {
-      final controller = CameraController(
-        _cameras.first,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
+      // 1. Chọn ảnh (Camera hoặc Thư viện)
+      // Dùng ImagePicker sẽ gọi app Camera gốc của Android -> Ổn định hơn nhiều
+      final XFile? photo = await _picker.pickImage(source: source);
 
-      _controller = controller;
-      _initFuture = controller.initialize();
+      if (photo == null) return; // Người dùng hủy chọn
 
-      await _initFuture;
+      setState(() {
+        _selectedImage = File(photo.path);
+        _isLoading = true;
+        _result = "Đang phân tích...";
+      });
+
+      // 2. Gọi AI
+      final aiService = LocalAIService();
+      // Thêm delay giả vờ 1 xíu để thấy hiệu ứng loading (nếu máy chạy quá nhanh)
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final String prediction = await aiService.predictImage(photo.path);
+
+      // 3. Cập nhật UI
       if (!mounted) return;
-      setState(() => _error = null);
+      setState(() {
+        _result = prediction;
+        _isLoading = false;
+      });
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = "Init camera failed: $e");
+      setState(() {
+        _result = "Lỗi: $e";
+        _isLoading = false;
+      });
     }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    final c = _controller;
-    if (c == null) return;
-
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      c.dispose();
-      _controller = null;
-      _initFuture = null;
-    } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _controller?.dispose();
-    _controller = null;
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text("Camera Stream")),
-        body: Center(child: Text(_error!, textAlign: TextAlign.center)),
-      );
-    }
-
-    final controller = _controller;
-    if (controller == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return Scaffold(
-      appBar: AppBar(title: const Text("Camera Stream")),
-      body: FutureBuilder(
-        future: _initFuture,
-        builder: (_, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return CameraPreview(controller);
-        },
+      appBar: AppBar(title: const Text("MobileNet V3 Test")),
+      body: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Hiển thị ảnh đã chọn
+              if (_selectedImage != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    _selectedImage!,
+                    height: 300,
+                    fit: BoxFit.cover,
+                  ),
+                )
+              else
+                Container(
+                  height: 200,
+                  width: 200,
+                  color: Colors.grey[300],
+                  child: const Icon(Icons.image, size: 100, color: Colors.grey),
+                ),
+
+              const SizedBox(height: 20),
+
+              // Hiển thị kết quả Loading hoặc Text
+              if (_isLoading)
+                const CircularProgressIndicator()
+              else
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Text(
+                    _result,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blueAccent,
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 40),
+
+              // Hai nút chức năng
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () => _pickImage(ImageSource.camera),
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text("Chụp Ảnh"),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => _pickImage(ImageSource.gallery),
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text("Thư Viện"),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
