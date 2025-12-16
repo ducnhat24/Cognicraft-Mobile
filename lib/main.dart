@@ -2,9 +2,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart'; // Thư viện chọn ảnh chuẩn
 import 'package:gemini_chat_app/data/services/local_ai_service.dart';
+import 'core/ai/gemini_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
 
   // Load Model 1 lần duy nhất
   try {
@@ -14,6 +17,11 @@ void main() async {
   } catch (e) {
     print("❌ AI Error: $e");
   }
+
+  // Test Gemini Service
+  final geminiService = GeminiService();
+  final result = await geminiService.ask("Đáp án là gì: What is the capital of France?");
+  debugPrint(result);
 
   runApp(const MyApp());
 }
